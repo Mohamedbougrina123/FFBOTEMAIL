@@ -112,7 +112,17 @@ def gen_temp_email():
     except:
         return None, None, None
 
-def get_all_messages(email, passw, sess):
+def get_message_content(message_id, token, sess):
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        message_response = sess.get(f"https://api.mail.tm/messages/{message_id}", headers=headers)
+        if message_response.status_code == 200:
+            return message_response.json()
+        return None
+    except:
+        return None
+
+def get_all_messages_with_content(email, passw, sess):
     try:
         token_res = sess.post("https://api.mail.tm/token", json={"address": email, "password": passw})
         if token_res.status_code != 200:
@@ -122,32 +132,35 @@ def get_all_messages(email, passw, sess):
         msgs_response = sess.get("https://api.mail.tm/messages", headers=headers)
         if msgs_response.status_code != 200:
             return []
+        
         msgs = msgs_response.json()
-        all_messages = []
+        all_messages_with_content = []
+        
         for msg in msgs.get('hydra:member', []):
             message_id = msg.get('id', '')
-            message_details_res = sess.get(f"https://api.mail.tm/messages/{message_id}", headers=headers)
-            if message_details_res.status_code == 200:
-                message_details = message_details_res.json()
-                all_messages.append({
-                    'subject': message_details.get('subject', ''),
-                    'from': message_details.get('from', {}),
-                    'to': message_details.get('to', []),
-                    'intro': message_details.get('intro', ''),
-                    'text': message_details.get('text', ''),
-                    'html': message_details.get('html', '')
-                })
-        return all_messages
+            message_content = get_message_content(message_id, token, sess)
+            if message_content:
+                all_messages_with_content.append(message_content)
+        
+        return all_messages_with_content
     except:
         return []
 
-def find_verification_code(messages):
-    for msg in messages:
-        text_content = f"{msg.get('subject', '')} {msg.get('intro', '')} {msg.get('text', '')}"
+def find_verification_code_in_content(message_content):
+    try:
+        text_content = message_content.get('text', '') or message_content.get('html', '')
         codes = re.findall(r'\b\d{4,14}\b', text_content)
         if codes:
             return codes[0]
-    return None
+        
+        subject = message_content.get('subject', '')
+        codes = re.findall(r'\b\d{4,14}\b', subject)
+        if codes:
+            return codes[0]
+            
+        return None
+    except:
+        return None
 
 def handle_auto_mail(sender_id, message_text):
     parts = message_text.split()
@@ -209,14 +222,22 @@ def auto_mail_process(sender_id, interval, target_email, token):
                                 if not active_auto_emails[sender_id]['active']:
                                     break
                                 
-                                messages = get_all_messages(temp_email, temp_pass, temp_session)
-                                if messages:
-                                    send_message(sender_id, f"📩 الرسائل المستلمة:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
+                                messages_with_content = get_all_messages_with_content(temp_email, temp_pass, temp_session)
                                 
-                                verification_code = find_verification_code(messages)
-                                if verification_code:
-                                    send_message(sender_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
-                                    break
+                                if messages_with_content:
+                                    for msg in messages_with_content:
+                                        msg_id = msg.get('id', '')
+                                        subject = msg.get('subject', '')
+                                        from_addr = msg.get('from', {}).get('address', '')
+                                        
+                                        if 'garena' in from_addr.lower() or 'verification' in subject.lower():
+                                            verification_code = find_verification_code_in_content(msg)
+                                            if verification_code:
+                                                send_message(sender_id, f"📩 رسالة من: {from_addr}\n📋 الموضوع: {subject}\n🔑 رمز التحقق: {verification_code}")
+                                                break
+                                    
+                                    if verification_code:
+                                        break
                                 
                                 time.sleep(10)
                             
