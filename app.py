@@ -51,22 +51,20 @@ def handle_webhook():
                     sender_id = messaging_event['sender']['id']
                     message_text = messaging_event['message'].get('text', '')
                     
-                    # التحقق من الحظر
                     if sender_id in banned_users:
                         if datetime.now() < banned_users[sender_id]['until']:
-                            send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات بسبب محاولات دخول فاشلة")
+                            send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات")
                             return "ok", 200
                         else:
                             del banned_users[sender_id]
                     
-                    # التحقق من كلمة المرور
                     if sender_id not in user_data or 'authenticated' not in user_data[sender_id]:
                         if message_text == BOT_PASSWORD:
                             if sender_id not in user_data:
                                 user_data[sender_id] = {}
                             user_data[sender_id]['authenticated'] = True
                             user_attempts[sender_id] = 0
-                            send_message(sender_id, "✅ تم المصادقة بنجاح!\n\n📋 الأوامر المتاحة:\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]\n/automail [seconds] [email] [token]")
+                            send_message(sender_id, "✅ تم المصادقة بنجاح!\n\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]\n/automail [seconds] [email] [token]")
                         else:
                             if sender_id not in user_attempts:
                                 user_attempts[sender_id] = 0
@@ -74,12 +72,11 @@ def handle_webhook():
                             
                             if user_attempts[sender_id] >= 3:
                                 banned_users[sender_id] = {'until': datetime.now() + timedelta(hours=3)}
-                                send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات بسبب محاولات دخول فاشلة")
+                                send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات")
                             else:
-                                send_message(sender_id, f"❌ كلمة مرور خاطئة! المحاولة {user_attempts[sender_id]}/3")
+                                send_message(sender_id, f"❌ كلمة مرور خاطئة! {user_attempts[sender_id]}/3")
                         return "ok", 200
                     
-                    # معالجة الأوامر بعد المصادقة
                     if message_text.startswith('/setToken'):
                         handle_set_token(sender_id, message_text)
                     elif message_text.startswith('/getToken'):
@@ -95,29 +92,19 @@ def handle_webhook():
                     elif message_text.startswith('/automail'):
                         handle_auto_mail(sender_id, message_text)
                     else:
-                        send_message(sender_id, "❌ أمر غير معروف\n\n📋 الأوامر المتاحة:\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]\n/automail [seconds] [email] [token]")
+                        send_message(sender_id, "❌ أمر غير معروف\n\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]\n/automail [seconds] [email] [token]")
     
     return "ok", 200
 
 def gen_temp_email():
     try:
         s = requests.Session()
-        domains_response = s.get("https://api.mail.tm/domains")
-        if domains_response.status_code != 200:
-            return None, None, None
-            
-        domains = domains_response.json().get('hydra:member', [])
-        if not domains:
-            return None, None, None
-            
+        domains = s.get("https://api.mail.tm/domains").json()['hydra:member']
         domain = random.choice(domains)['domain']
         user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
         passw = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
         email = f"ffbotemail{user}@{domain}"
-        
-        acc_res = s.post("https://api.mail.tm/accounts", 
-                        json={"address": email, "password": passw})
-        
+        acc_res = s.post("https://api.mail.tm/accounts", json={"address": email, "password": passw})
         if acc_res.status_code == 201:
             return email, passw, s
         return None, None, None
@@ -126,27 +113,16 @@ def gen_temp_email():
 
 def get_verif_codes(email, passw, sess):
     try:
-        token_res = sess.post("https://api.mail.tm/token", 
-                             json={"address": email, "password": passw})
+        token_res = sess.post("https://api.mail.tm/token", json={"address": email, "password": passw})
         if token_res.status_code != 200:
             return []
-            
-        token = token_res.json().get('token', '')
+        token = token_res.json()['token']
         headers = {"Authorization": f"Bearer {token}"}
-        msgs_response = sess.get("https://api.mail.tm/messages", headers=headers)
-        
-        if msgs_response.status_code != 200:
-            return []
-            
-        msgs = msgs_response.json()
+        msgs = sess.get("https://api.mail.tm/messages", headers=headers).json()
         codes = []
-        
         for msg in msgs.get('hydra:member', []):
-            subject = msg.get('subject', '')
-            intro = msg.get('intro', '')
-            text = f"{subject} {intro}"
-            codes.extend(re.findall(r'\b\d{4,10}\b', text))
-            
+            text = msg.get('subject', '') + ' ' + msg.get('intro', '')
+            codes.extend(re.findall(r'\b\d{4,14}\b', text))
         return codes
     except:
         return []
@@ -154,7 +130,7 @@ def get_verif_codes(email, passw, sess):
 def handle_auto_mail(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 4:
-        send_message(sender_id, "📝 الاستخدام:\n/automail [seconds] [email] [token]")
+        send_message(sender_id, "/automail [seconds] [email] [token]")
         return
     
     try:
@@ -162,18 +138,15 @@ def handle_auto_mail(sender_id, message_text):
         target_email = parts[2]
         token = parts[3]
         
-        # إيقاف أي عملية سابقة
         if sender_id in active_auto_emails:
             active_auto_emails[sender_id]['active'] = False
         
-        # بدء العملية الجديدة
         active_auto_emails[sender_id] = {'active': True}
-        thread = threading.Thread(target=auto_mail_process, 
-                                args=(sender_id, interval, target_email, token))
+        thread = threading.Thread(target=auto_mail_process, args=(sender_id, interval, target_email, token))
         thread.daemon = True
         thread.start()
         
-        send_message(sender_id, f"✅ بدء المراقبة التلقائية كل {interval} ثانية\n📧 الإيميل المستهدف: {target_email}")
+        send_message(sender_id, f"✅ بدء المراقبة التلقائية كل {interval} ثانية\n📧 {target_email}")
     except ValueError:
         send_message(sender_id, "❌ يرجى إدخال رقم صحيح للثواني")
 
@@ -182,18 +155,15 @@ def auto_mail_process(sender_id, interval, target_email, token):
     
     while sender_id in active_auto_emails and active_auto_emails[sender_id]['active']:
         try:
-            # التحقق من وجود الإيميل
             url = f"https://100067.connect.garena.com/game/account_security/bind:get_bind_info?app_id=100067&access_token={token}"
             response = requests.get(url, headers=COMMON_HEADERS)
             
             if target_email not in response.text:
-                # إنشاء إيميل مؤقت إذا لم يكن موجود
                 if not temp_email:
                     temp_email, temp_pass, temp_session = gen_temp_email()
                     if temp_email:
                         send_message(sender_id, f"📧 تم إنشاء إيميل مؤقت: {temp_email}")
                         
-                        # إضافة الإيميل المؤقت
                         add_email_url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
                         payload = {
                             'app_id': '100067',
@@ -209,15 +179,13 @@ def auto_mail_process(sender_id, interval, target_email, token):
                         if add_response.status_code == 200:
                             send_message(sender_id, f"✅ تم إرسال طلب إضافة الإيميل المؤقت: {temp_email}")
                             
-                            # البحث عن رمز التحقق
                             code_found = False
-                            for _ in range(10):  # محاولات البحث عن الرمز
+                            for _ in range(10):
                                 codes = get_verif_codes(temp_email, temp_pass, temp_session)
                                 if codes:
                                     verification_code = codes[0]
                                     send_message(sender_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
                                     
-                                    # تأكيد الرمز
                                     verify_url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
                                     verify_payload = {
                                         'app_id': '100067',
@@ -228,7 +196,7 @@ def auto_mail_process(sender_id, interval, target_email, token):
                                     
                                     verify_response = requests.post(verify_url, data=verify_payload, headers=COMMON_HEADERS)
                                     if verify_response.status_code == 200:
-                                        send_message(sender_id, f"✅ تم تأكيد الإيميل المؤقت: {temp_email}\n🔑 بالرمز: {verification_code}")
+                                        send_message(sender_id, f"✅ تم تأكيد الإيميل المؤقت: {temp_email}\n🔑 {verification_code}")
                                         code_found = True
                                         break
                                 
@@ -237,26 +205,20 @@ def auto_mail_process(sender_id, interval, target_email, token):
                             if not code_found:
                                 send_message(sender_id, "❌ لم يتم العثور على رمز التحقق")
                         else:
-                            send_message(sender_id, f"❌ فشل إضافة الإيميل المؤقت: {add_response.text}")
+                            send_message(sender_id, f"❌ فشل إضافة الإيميل المؤقت")
                     else:
                         send_message(sender_id, "❌ فشل إنشاء إيميل مؤقت")
                 else:
                     send_message(sender_id, "⚠️ تم حذف ربط الاستعادة الخاص بك!")
-            else:
-                # الإيميل لا يزال موجوداً
-                if temp_email:
-                    send_message(sender_id, f"✅ الإيميل المؤقت {temp_email} لا يزال نشطاً")
             
             time.sleep(interval)
         except Exception as e:
-            send_message(sender_id, f"❌ خطأ في العملية التلقائية: {str(e)}")
             time.sleep(interval)
 
-# باقي الدوال تبقى كما هي (handle_set_token, handle_get_token, etc.)
 def handle_set_token(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "📝 الاستخدام:\n/setToken [token]")
+        send_message(sender_id, "/setToken [token]")
         return
     
     token = parts[1]
@@ -268,14 +230,14 @@ def handle_set_token(sender_id, message_text):
     
     try:
         response = requests.get(url, headers=COMMON_HEADERS)
-        send_message(sender_id, f"📨 الاستجابة:\n{response.text}")
+        send_message(sender_id, f"{response.text}")
     except Exception as e:
-        send_message(sender_id, f"❌ خطأ:\n{str(e)}")
+        send_message(sender_id, f"❌ {str(e)}")
 
 def handle_get_token(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "📝 الاستخدام:\n/getToken [token]")
+        send_message(sender_id, "/getToken [token]")
         return
     
     token = parts[1]
@@ -283,12 +245,12 @@ def handle_get_token(sender_id, message_text):
         user_data[sender_id] = {}
     user_data[sender_id]['token'] = token
     
-    send_message(sender_id, f"✅ تم استلام التوكن:\n{token}")
+    send_message(sender_id, f"{token}")
 
 def handle_set_email(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "📝 الاستخدام:\n/setEmail [email]")
+        send_message(sender_id, "/setEmail [email]")
         return
     
     email = parts[1]
@@ -298,7 +260,7 @@ def handle_set_email(sender_id, message_text):
     
     token = user_data[sender_id].get('token', '')
     if not token:
-        send_message(sender_id, "❌ يرجى تعيين التوكن أولاً باستخدام\n/setToken [token]")
+        send_message(sender_id, "❌ /setToken [token]")
         return
     
     url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
@@ -314,14 +276,14 @@ def handle_set_email(sender_id, message_text):
     
     try:
         response = requests.post(url, data=payload, headers=headers)
-        send_message(sender_id, f"📨 استجابة إرسال OTP:\n{response.text}")
+        send_message(sender_id, f"{response.text}")
     except Exception as e:
-        send_message(sender_id, f"❌ خطأ في إرسال OTP:\n{str(e)}")
+        send_message(sender_id, f"❌ {str(e)}")
 
 def handle_set_otp(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "📝 الاستخدام:\n/setOtp [otp]")
+        send_message(sender_id, "/setOtp [otp]")
         return
     
     otp = parts[1]
@@ -333,11 +295,11 @@ def handle_set_otp(sender_id, message_text):
     email = user_data[sender_id].get('email', '')
     
     if not token:
-        send_message(sender_id, "❌ يرجى تعيين التوكن أولاً باستخدام\n/setToken [token]")
+        send_message(sender_id, "❌ /setToken [token]")
         return
     
     if not email:
-        send_message(sender_id, "❌ يرجى تعيين الإيميل أولاً باستخدام\n/setEmail [email]")
+        send_message(sender_id, "❌ /setEmail [email]")
         return
     
     url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
@@ -360,19 +322,19 @@ def handle_set_otp(sender_id, message_text):
                 if verifier_token:
                     create_bind_request(sender_id, token, email, verifier_token)
                 else:
-                    send_message(sender_id, f"✅ تم التحقق من OTP ولكن لم يتم العثور على verifier_token:\n{response_text}")
+                    send_message(sender_id, f"{response_text}")
             except ValueError:
-                send_message(sender_id, f"📨 استجابة التحقق من OTP:\n{response_text}")
+                send_message(sender_id, f"{response_text}")
         else:
-            send_message(sender_id, f"❌ فشل التحقق من OTP:\n{response_text}")
+            send_message(sender_id, f"{response_text}")
             
     except Exception as e:
-        send_message(sender_id, f"❌ خطأ في التحقق من OTP:\n{str(e)}")
+        send_message(sender_id, f"❌ {str(e)}")
 
 def handle_remove_email(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "📝 الاستخدام:\n/RemoveEmail [token]")
+        send_message(sender_id, "/RemoveEmail [token]")
         return
     
     token = parts[1]
@@ -384,14 +346,14 @@ def handle_remove_email(sender_id, message_text):
     
     try:
         response = requests.post(url, data=payload, headers=COMMON_HEADERS)
-        send_message(sender_id, f"📨 استجابة إزالة الإيميل:\n{response.text}")
+        send_message(sender_id, f"{response.text}")
     except Exception as e:
-        send_message(sender_id, f"❌ خطأ في إزالة الإيميل:\n{str(e)}")
+        send_message(sender_id, f"❌ {str(e)}")
 
 def handle_loop_email(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 4:
-        send_message(sender_id, "📝 الاستخدام:\n/LoopEmail [seconds] [email] [token]")
+        send_message(sender_id, "/LoopEmail [seconds] [email] [token]")
         return
     
     try:
@@ -399,17 +361,15 @@ def handle_loop_email(sender_id, message_text):
         email = parts[2]
         token = parts[3]
         
-        # إيقاف أي حلقة نشطة سابقة لنفس المستخدم
         if sender_id in active_loops:
             active_loops[sender_id]['active'] = False
         
-        # بدء حلقة جديدة
         active_loops[sender_id] = {'active': True}
         thread = threading.Thread(target=email_loop, args=(sender_id, interval, email, token))
         thread.daemon = True
         thread.start()
         
-        send_message(sender_id, f"✅ بدء مراقبة الإيميل كل {interval} ثانية\n📧 الإيميل: {email}")
+        send_message(sender_id, f"✅ بدء المراقبة كل {interval} ثانية\n📧 {email}")
     except ValueError:
         send_message(sender_id, "❌ يرجى إدخال رقم صحيح للثواني")
 
@@ -438,9 +398,9 @@ def create_bind_request(sender_id, token, email, verifier_token):
     
     try:
         response = requests.post(url, data=payload, headers=COMMON_HEADERS)
-        send_message(sender_id, f"📨 استجابة ربط الإيميل:\n{response.text}")
+        send_message(sender_id, f"{response.text}")
     except Exception as e:
-        send_message(sender_id, f"❌ خطأ في ربط الإيميل:\n{str(e)}")
+        send_message(sender_id, f"❌ {str(e)}")
 
 def send_message(recipient_id, message_text):
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
@@ -454,8 +414,7 @@ def send_message(recipient_id, message_text):
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
     except Exception as e:
-        print(f"❌ خطأ في إرسال الرسالة: {e}")
+        print(f"❌ {e}")
 
 if __name__ == '__main__':
     app.run()
-                
