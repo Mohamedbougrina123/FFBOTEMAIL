@@ -4,7 +4,7 @@ import json
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = "your_verify_token_here"
+VERIFY_TOKEN = "FFEMAIL"
 PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN_HERE"
 
 user_data = {}
@@ -216,3 +216,4 @@ def send_message(recipient_id, message_text):
 
 if __name__ == '__main__':
     app.run()
+
