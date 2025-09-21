@@ -1,13 +1,26 @@
 from flask import Flask, request, jsonify
 import requests
 import json
+import threading
+import time
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
 VERIFY_TOKEN = "FFEMAIL"
 PAGE_ACCESS_TOKEN = "EAANfe3CLeJEBPfx0r3oKyuvYBaKZAptFpTEIkg2b4lOcdSg6q48NV5kPYvZAZBXCYP7mxPHiWmmS0ZA0dY2eZCsmza8d4L1h0eQxBaESXRqmXHnuzyZA9MrOUaiETigCQgf2QD3YF7xoJJOwDirPEc4GzOHyunYEBvsRF07m3n1ZAihJ4enRlLsy8RRBPQzoRnTXF7fbwZDZD"
+BOT_PASSWORD = "ffm-morad-mohamed"
 
 user_data = {}
+user_attempts = {}
+banned_users = {}
+active_loops = {}
+
+COMMON_HEADERS = {
+    'User-Agent': "GarenaMSDK/4.0.19P9(J200F ;Android 7.1.2;ar;EG;)",
+    'Connection': "Keep-Alive",
+    'Accept-Encoding': "gzip"
+}
 
 @app.route('/webhook', methods=['GET'])
 def verify_webhook():
@@ -34,6 +47,35 @@ def handle_webhook():
                     sender_id = messaging_event['sender']['id']
                     message_text = messaging_event['message'].get('text', '')
                     
+                    # التحقق من الحظر
+                    if sender_id in banned_users:
+                        if datetime.now() < banned_users[sender_id]['until']:
+                            send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات بسبب محاولات دخول فاشلة")
+                            return "ok", 200
+                        else:
+                            del banned_users[sender_id]
+                    
+                    # التحقق من كلمة المرور
+                    if sender_id not in user_data or 'authenticated' not in user_data[sender_id]:
+                        if message_text == BOT_PASSWORD:
+                            if sender_id not in user_data:
+                                user_data[sender_id] = {}
+                            user_data[sender_id]['authenticated'] = True
+                            user_attempts[sender_id] = 0
+                            send_message(sender_id, "✅ تم المصادقة بنجاح!\n\n📋 الأوامر المتاحة:\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]")
+                        else:
+                            if sender_id not in user_attempts:
+                                user_attempts[sender_id] = 0
+                            user_attempts[sender_id] += 1
+                            
+                            if user_attempts[sender_id] >= 3:
+                                banned_users[sender_id] = {'until': datetime.now() + timedelta(hours=3)}
+                                send_message(sender_id, "⛔ تم حظرك لمدة 3 ساعات بسبب محاولات دخول فاشلة")
+                            else:
+                                send_message(sender_id, f"❌ كلمة مرور خاطئة! المحاولة {user_attempts[sender_id]}/3")
+                        return "ok", 200
+                    
+                    # معالجة الأوامر بعد المصادقة
                     if message_text.startswith('/setToken'):
                         handle_set_token(sender_id, message_text)
                     elif message_text.startswith('/getToken'):
@@ -42,15 +84,19 @@ def handle_webhook():
                         handle_set_email(sender_id, message_text)
                     elif message_text.startswith('/setOtp'):
                         handle_set_otp(sender_id, message_text)
+                    elif message_text.startswith('/RemoveEmail'):
+                        handle_remove_email(sender_id, message_text)
+                    elif message_text.startswith('/LoopEmail'):
+                        handle_loop_email(sender_id, message_text)
                     else:
-                        send_message(sender_id, "Unknown command. Available: /setToken, /getToken, /setEmail, /setOtp")
+                        send_message(sender_id, "❌ أمر غير معروف\n\n📋 الأوامر المتاحة:\n/setToken [token]\n/getToken [token]\n/setEmail [email]\n/setOtp [otp]\n/RemoveEmail [token]\n/LoopEmail [seconds] [email] [token]")
     
     return "ok", 200
 
 def handle_set_token(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "Usage: /setToken [token]")
+        send_message(sender_id, "📝 الاستخدام:\n/setToken [token]")
         return
     
     token = parts[1]
@@ -59,22 +105,17 @@ def handle_set_token(sender_id, message_text):
     user_data[sender_id]['token'] = token
     
     url = f"https://100067.connect.garena.com/game/account_security/bind:get_bind_info?app_id=100067&access_token={token}"
-    headers = {
-        'User-Agent': "GarenaMSDK/4.0.19P9(J200F ;Android 7.1.2;ar;EG;)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip"
-    }
     
     try:
-        response = requests.get(url, headers=headers)
-        send_message(sender_id, f"Response: {response.text}")
+        response = requests.get(url, headers=COMMON_HEADERS)
+        send_message(sender_id, f"📨 الاستجابة:\n{response.text}")
     except Exception as e:
-        send_message(sender_id, f"Error: {str(e)}")
+        send_message(sender_id, f"❌ خطأ:\n{str(e)}")
 
 def handle_get_token(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "Usage: /getToken [token]")
+        send_message(sender_id, "📝 الاستخدام:\n/getToken [token]")
         return
     
     token = parts[1]
@@ -82,12 +123,12 @@ def handle_get_token(sender_id, message_text):
         user_data[sender_id] = {}
     user_data[sender_id]['token'] = token
     
-    send_message(sender_id, f"Token received: {token}")
+    send_message(sender_id, f"✅ تم استلام التوكن:\n{token}")
 
 def handle_set_email(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "Usage: /setEmail [email]")
+        send_message(sender_id, "📝 الاستخدام:\n/setEmail [email]")
         return
     
     email = parts[1]
@@ -97,7 +138,7 @@ def handle_set_email(sender_id, message_text):
     
     token = user_data[sender_id].get('token', '')
     if not token:
-        send_message(sender_id, "Please set token first using /setToken")
+        send_message(sender_id, "❌ يرجى تعيين التوكن أولاً باستخدام\n/setToken [token]")
         return
     
     url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
@@ -108,23 +149,19 @@ def handle_set_email(sender_id, message_text):
         'locale': 'ar_EG'
     }
     
-    headers = {
-        'User-Agent': "GarenaMSDK/4.0.19P9(J200F ;Android 7.1.2;ar;EG;)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip",
-        'Accept': "application/json"
-    }
+    headers = COMMON_HEADERS.copy()
+    headers['Accept'] = "application/json"
     
     try:
         response = requests.post(url, data=payload, headers=headers)
-        send_message(sender_id, f"OTP sent response: {response.text}")
+        send_message(sender_id, f"📨 استجابة إرسال OTP:\n{response.text}")
     except Exception as e:
-        send_message(sender_id, f"Error sending OTP: {str(e)}")
+        send_message(sender_id, f"❌ خطأ في إرسال OTP:\n{str(e)}")
 
 def handle_set_otp(sender_id, message_text):
     parts = message_text.split()
     if len(parts) < 2:
-        send_message(sender_id, "Usage: /setOtp [otp]")
+        send_message(sender_id, "📝 الاستخدام:\n/setOtp [otp]")
         return
     
     otp = parts[1]
@@ -136,11 +173,11 @@ def handle_set_otp(sender_id, message_text):
     email = user_data[sender_id].get('email', '')
     
     if not token:
-        send_message(sender_id, "Please set token first using /setToken")
+        send_message(sender_id, "❌ يرجى تعيين التوكن أولاً باستخدام\n/setToken [token]")
         return
     
     if not email:
-        send_message(sender_id, "Please set email first using /setEmail")
+        send_message(sender_id, "❌ يرجى تعيين الإيميل أولاً باستخدام\n/setEmail [email]")
         return
     
     url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
@@ -151,14 +188,8 @@ def handle_set_otp(sender_id, message_text):
         'email': email
     }
     
-    headers = {
-        'User-Agent': "GarenaMSDK/4.0.19P9(J200F ;Android 7.1.2;ar;EG;)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip"
-    }
-    
     try:
-        response = requests.post(url, data=payload, headers=headers)
+        response = requests.post(url, data=payload, headers=COMMON_HEADERS)
         response_text = response.text
         
         if response.status_code == 200:
@@ -169,14 +200,71 @@ def handle_set_otp(sender_id, message_text):
                 if verifier_token:
                     create_bind_request(sender_id, token, email, verifier_token)
                 else:
-                    send_message(sender_id, f"OTP verified but no verifier_token: {response_text}")
+                    send_message(sender_id, f"✅ تم التحقق من OTP ولكن لم يتم العثور على verifier_token:\n{response_text}")
             except ValueError:
-                send_message(sender_id, f"OTP verification response: {response_text}")
+                send_message(sender_id, f"📨 استجابة التحقق من OTP:\n{response_text}")
         else:
-            send_message(sender_id, f"OTP verification failed: {response_text}")
+            send_message(sender_id, f"❌ فشل التحقق من OTP:\n{response_text}")
             
     except Exception as e:
-        send_message(sender_id, f"Error verifying OTP: {str(e)}")
+        send_message(sender_id, f"❌ خطأ في التحقق من OTP:\n{str(e)}")
+
+def handle_remove_email(sender_id, message_text):
+    parts = message_text.split()
+    if len(parts) < 2:
+        send_message(sender_id, "📝 الاستخدام:\n/RemoveEmail [token]")
+        return
+    
+    token = parts[1]
+    url = "https://100067.connect.garena.com/game/account_security/bind:cancel_request"
+    payload = {
+        'app_id': "100067",
+        'access_token': token
+    }
+    
+    try:
+        response = requests.post(url, data=payload, headers=COMMON_HEADERS)
+        send_message(sender_id, f"📨 استجابة إزالة الإيميل:\n{response.text}")
+    except Exception as e:
+        send_message(sender_id, f"❌ خطأ في إزالة الإيميل:\n{str(e)}")
+
+def handle_loop_email(sender_id, message_text):
+    parts = message_text.split()
+    if len(parts) < 4:
+        send_message(sender_id, "📝 الاستخدام:\n/LoopEmail [seconds] [email] [token]")
+        return
+    
+    try:
+        interval = int(parts[1])
+        email = parts[2]
+        token = parts[3]
+        
+        # إيقاف أي حلقة نشطة سابقة لنفس المستخدم
+        if sender_id in active_loops:
+            active_loops[sender_id]['active'] = False
+        
+        # بدء حلقة جديدة
+        active_loops[sender_id] = {'active': True}
+        thread = threading.Thread(target=email_loop, args=(sender_id, interval, email, token))
+        thread.daemon = True
+        thread.start()
+        
+        send_message(sender_id, f"✅ بدء مراقبة الإيميل كل {interval} ثانية\n📧 الإيميل: {email}")
+    except ValueError:
+        send_message(sender_id, "❌ يرجى إدخال رقم صحيح للثواني")
+
+def email_loop(sender_id, interval, email, token):
+    while sender_id in active_loops and active_loops[sender_id]['active']:
+        try:
+            url = f"https://100067.connect.garena.com/game/account_security/bind:get_bind_info?app_id=100067&access_token={token}"
+            response = requests.get(url, headers=COMMON_HEADERS)
+            
+            if email not in response.text:
+                send_message(sender_id, "⚠️ تم حذف ربط الاستعادة الخاص بك!")
+            
+            time.sleep(interval)
+        except Exception as e:
+            time.sleep(interval)
 
 def create_bind_request(sender_id, token, email, verifier_token):
     url = "https://100067.connect.garena.com/game/account_security/bind:create_bind_request"
@@ -188,17 +276,11 @@ def create_bind_request(sender_id, token, email, verifier_token):
         'email': email
     }
     
-    headers = {
-        'User-Agent': "GarenaMSDK/4.0.19P9(J200F ;Android 7.1.2;ar;EG;)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip"
-    }
-    
     try:
-        response = requests.post(url, data=payload, headers=headers)
-        send_message(sender_id, f"Bind request response: {response.text}")
+        response = requests.post(url, data=payload, headers=COMMON_HEADERS)
+        send_message(sender_id, f"📨 استجابة ربط الإيميل:\n{response.text}")
     except Exception as e:
-        send_message(sender_id, f"Error creating bind request: {str(e)}")
+        send_message(sender_id, f"❌ خطأ في ربط الإيميل:\n{str(e)}")
 
 def send_message(recipient_id, message_text):
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
@@ -212,9 +294,7 @@ def send_message(recipient_id, message_text):
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
     except Exception as e:
-        print(f"Message sending error: {e}")
+        print(f"❌ خطأ في إرسال الرسالة: {e}")
 
 if __name__ == '__main__':
-    app.run()
-
-
+    app.run(debug=True, port=5000)
