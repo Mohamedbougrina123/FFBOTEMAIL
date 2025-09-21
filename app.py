@@ -431,4 +431,5 @@ def send_message(recipient_id, message_text):
         print(f"❌ {e}")
 
 if __name__ == '__main__':
-    app.run(threaded=True)
+    app.run()
+
