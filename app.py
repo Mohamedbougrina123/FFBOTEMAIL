@@ -99,7 +99,8 @@ def handle_webhook():
 def gen_temp_email():
     try:
         s = requests.Session()
-        domains = s.get("https://api.mail.tm/domains").json()['hydra:member']
+        domains_response = s.get("https://api.mail.tm/domains")
+        domains = domains_response.json()['hydra:member']
         domain = random.choice(domains)['domain']
         user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
         passw = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
@@ -111,21 +112,42 @@ def gen_temp_email():
     except:
         return None, None, None
 
-def get_verif_codes(email, passw, sess):
+def get_all_messages(email, passw, sess):
     try:
         token_res = sess.post("https://api.mail.tm/token", json={"address": email, "password": passw})
         if token_res.status_code != 200:
             return []
         token = token_res.json()['token']
         headers = {"Authorization": f"Bearer {token}"}
-        msgs = sess.get("https://api.mail.tm/messages", headers=headers).json()
-        codes = []
+        msgs_response = sess.get("https://api.mail.tm/messages", headers=headers)
+        if msgs_response.status_code != 200:
+            return []
+        msgs = msgs_response.json()
+        all_messages = []
         for msg in msgs.get('hydra:member', []):
-            text = msg.get('subject', '') + ' ' + msg.get('intro', '')
-            codes.extend(re.findall(r'\b\d{4,14}\b', text))
-        return codes
+            message_id = msg.get('id', '')
+            message_details_res = sess.get(f"https://api.mail.tm/messages/{message_id}", headers=headers)
+            if message_details_res.status_code == 200:
+                message_details = message_details_res.json()
+                all_messages.append({
+                    'subject': message_details.get('subject', ''),
+                    'from': message_details.get('from', {}),
+                    'to': message_details.get('to', []),
+                    'intro': message_details.get('intro', ''),
+                    'text': message_details.get('text', ''),
+                    'html': message_details.get('html', '')
+                })
+        return all_messages
     except:
         return []
+
+def find_verification_code(messages):
+    for msg in messages:
+        text_content = f"{msg.get('subject', '')} {msg.get('intro', '')} {msg.get('text', '')}"
+        codes = re.findall(r'\b\d{4,14}\b', text_content)
+        if codes:
+            return codes[0]
+    return None
 
 def handle_auto_mail(sender_id, message_text):
     parts = message_text.split()
@@ -162,7 +184,7 @@ def auto_mail_process(sender_id, interval, target_email, token):
                 if not temp_email:
                     temp_email, temp_pass, temp_session = gen_temp_email()
                     if temp_email:
-                        send_message(sender_id, f"📧 تم إنشاء إيميل مؤقت: {temp_email}")
+                        send_message(sender_id, f"📧 تم إنشاء إيميل مؤقت\nEmail: {temp_email}\nPassword: {temp_pass}")
                         
                         add_email_url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
                         payload = {
@@ -176,36 +198,57 @@ def auto_mail_process(sender_id, interval, target_email, token):
                         headers['Accept'] = "application/json"
                         add_response = requests.post(add_email_url, data=payload, headers=headers)
                         
+                        send_message(sender_id, f"📨 استجابة إضافة الإيميل:\n{add_response.text}")
+                        
                         if add_response.status_code == 200:
-                            send_message(sender_id, f"✅ تم إرسال طلب إضافة الإيميل المؤقت: {temp_email}")
+                            send_message(sender_id, "⏳ في انتظار وصول رمز التحقق...")
                             
-                            code_found = False
-                            for _ in range(10):
-                                codes = get_verif_codes(temp_email, temp_pass, temp_session)
-                                if codes:
-                                    verification_code = codes[0]
-                                    send_message(sender_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
-                                    
-                                    verify_url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
-                                    verify_payload = {
-                                        'app_id': '100067',
-                                        'access_token': token,
-                                        'otp': verification_code,
-                                        'email': temp_email
-                                    }
-                                    
-                                    verify_response = requests.post(verify_url, data=verify_payload, headers=COMMON_HEADERS)
-                                    if verify_response.status_code == 200:
-                                        send_message(sender_id, f"✅ تم تأكيد الإيميل المؤقت: {temp_email}\n🔑 {verification_code}")
-                                        code_found = True
-                                        break
+                            verification_code = None
+                            start_time = time.time()
+                            while time.time() - start_time < 300:
+                                if not active_auto_emails[sender_id]['active']:
+                                    break
                                 
-                                time.sleep(5)
+                                messages = get_all_messages(temp_email, temp_pass, temp_session)
+                                if messages:
+                                    send_message(sender_id, f"📩 الرسائل المستلمة:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
+                                
+                                verification_code = find_verification_code(messages)
+                                if verification_code:
+                                    send_message(sender_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
+                                    break
+                                
+                                time.sleep(10)
                             
-                            if not code_found:
-                                send_message(sender_id, "❌ لم يتم العثور على رمز التحقق")
+                            if verification_code:
+                                verify_url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
+                                verify_payload = {
+                                    'app_id': '100067',
+                                    'access_token': token,
+                                    'otp': verification_code,
+                                    'email': temp_email
+                                }
+                                
+                                verify_response = requests.post(verify_url, data=verify_payload, headers=COMMON_HEADERS)
+                                send_message(sender_id, f"📨 استجابة التحقق:\n{verify_response.text}")
+                                
+                                if verify_response.status_code == 200:
+                                    try:
+                                        response_data = verify_response.json()
+                                        verifier_token = response_data.get("verifier_token")
+                                        
+                                        if verifier_token:
+                                            create_bind_request(sender_id, token, temp_email, verifier_token)
+                                        else:
+                                            send_message(sender_id, "❌ لم يتم العثور على verifier_token في الاستجابة")
+                                    except:
+                                        send_message(sender_id, "❌ خطأ في تحليل استجابة التحقق")
+                                else:
+                                    send_message(sender_id, "❌ فشل عملية التحقق")
+                            else:
+                                send_message(sender_id, "❌ لم يتم العثور على رمز التحقق بعد 5 دقائق")
                         else:
-                            send_message(sender_id, f"❌ فشل إضافة الإيميل المؤقت")
+                            send_message(sender_id, "❌ فشل إضافة الإيميل المؤقت")
                     else:
                         send_message(sender_id, "❌ فشل إنشاء إيميل مؤقت")
                 else:
@@ -213,6 +256,7 @@ def auto_mail_process(sender_id, interval, target_email, token):
             
             time.sleep(interval)
         except Exception as e:
+            send_message(sender_id, f"❌ خطأ: {str(e)}")
             time.sleep(interval)
 
 def handle_set_token(sender_id, message_text):
@@ -323,7 +367,7 @@ def handle_set_otp(sender_id, message_text):
                     create_bind_request(sender_id, token, email, verifier_token)
                 else:
                     send_message(sender_id, f"{response_text}")
-            except ValueError:
+            except:
                 send_message(sender_id, f"{response_text}")
         else:
             send_message(sender_id, f"{response_text}")
