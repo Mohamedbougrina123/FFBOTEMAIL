@@ -5,7 +5,7 @@ import json
 app = Flask(__name__)
 
 VERIFY_TOKEN = "FFEMAIL"
-PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN_HERE"
+PAGE_ACCESS_TOKEN = "EAANfe3CLeJEBPfx0r3oKyuvYBaKZAptFpTEIkg2b4lOcdSg6q48NV5kPYvZAZBXCYP7mxPHiWmmS0ZA0dY2eZCsmza8d4L1h0eQxBaESXRqmXHnuzyZA9MrOUaiETigCQgf2QD3YF7xoJJOwDirPEc4GzOHyunYEBvsRF07m3n1ZAihJ4enRlLsy8RRBPQzoRnTXF7fbwZDZD"
 
 user_data = {}
 
@@ -216,4 +216,5 @@ def send_message(recipient_id, message_text):
 
 if __name__ == '__main__':
     app.run()
+
 
