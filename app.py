@@ -3,7 +3,7 @@ import requests, random, string, re, time
 
 app = Flask(__name__)
 
-BOT_TOKEN = "8391656250:AAEth5YF1F5_O6eA3HtMfsmkXdMcXTrDxJ0"
+BOT_TOKEN = "8061516463:AAFey2ud8QNBFRKLyyVHyLGuGNMz4ThDvQU"
 active_monitors = {}
 
 COMMON_HEADERS = {
@@ -80,14 +80,14 @@ def create_bind(token, email, verifier_token):
     return response.text
 
 def monitor_process(chat_id, target_email, token):
-    current_target = target_email
-    
     while active_monitors.get(chat_id):
         try:
             current_email = get_current_email(token)
             
-            if current_email != current_target:
-                send_telegram_message(chat_id, f"⚠️ تم تغيير الإيميل من {current_target} إلى {current_email}")
+            if current_email == target_email:
+                send_telegram_message(chat_id, f"✅ الإيميل المستهدف لا يزال: {target_email}")
+            else:
+                send_telegram_message(chat_id, f"⚠️ تم تغيير الإيميل إلى: {current_email}")
                 send_telegram_message(chat_id, "🔄 جاري استبدال الإيميل...")
                 
                 remove_response = remove_email(token)
@@ -101,7 +101,7 @@ def monitor_process(chat_id, target_email, token):
                     add_response = add_email(token, temp_email)
                     send_telegram_message(chat_id, f"📨 {add_response}")
                     
-                    if add_response:
+                    if '"result":0' in add_response:
                         send_telegram_message(chat_id, "⏳ في انتظار رمز التحقق...")
                         
                         for i in range(60):
@@ -120,16 +120,14 @@ def monitor_process(chat_id, target_email, token):
                                         verifier_token = verifier_match.group(1)
                                         bind_response = create_bind(token, temp_email, verifier_token)
                                         send_telegram_message(chat_id, f"🔗 {bind_response}")
-                                        current_target = temp_email
-                                        send_telegram_message(chat_id, f"✅ جاري استهداف @{temp_email}")
+                                        target_email = temp_email
+                                        send_telegram_message(chat_id, f"✅ تم تحديث الإيميل المستهدف إلى: {temp_email}")
                                 break
                             time.sleep(5)
                         else:
                             send_telegram_message(chat_id, "❌ انتهى وقت الانتظار")
                 else:
                     send_telegram_message(chat_id, "❌ فشل إنشاء إيميل")
-            else:
-                send_telegram_message(chat_id, f"✅ الإيميل المستهدف لا يزال: @{current_target}")
             
             time.sleep(10)
         except Exception as e:
@@ -165,4 +163,3 @@ def handle_telegram_webhook():
 
 if __name__ == '__main__':
     app.run()
-
