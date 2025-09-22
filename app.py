@@ -81,97 +81,114 @@ def get_verification_code(email, passw, sess):
     except:
         return None
 
-def monitor_process(chat_id, token):
-    temp_email, temp_pass, temp_session = None, None, None
-    
+def check_email_exists(token, target_email):
+    try:
+        url = f"https://100067.connect.garena.com/game/account_security/bind:get_bind_info?app_id=100067&access_token={token}"
+        response = requests.get(url, headers=COMMON_HEADERS)
+        return target_email in response.text
+    except:
+        return False
+
+def remove_existing_email(token):
+    try:
+        url = "https://100067.connect.garena.com/game/account_security/bind:cancel_request"
+        payload = {'app_id': "100067", 'access_token': token}
+        response = requests.post(url, data=payload, headers=COMMON_HEADERS)
+        return response.text
+    except:
+        return "❌ فشل حذف الإيميل"
+
+def monitor_process(chat_id, target_email, token):
     while chat_id in active_monitors and active_monitors[chat_id]['active']:
         try:
-            url = f"https://100067.connect.garena.com/game/account_security/bind:get_bind_info?app_id=100067&access_token={token}"
-            response = requests.get(url, headers=COMMON_HEADERS)
-            
-            if '"email":null' in response.text or '"email":""' in response.text or '"email"' not in response.text:
-                if not temp_email:
-                    temp_email, temp_pass, temp_session = gen_temp_email()
-                    if temp_email:
-                        send_telegram_message(chat_id, f"📧 تم إنشاء إيميل مؤقت\nEmail: {temp_email}\nPassword: {temp_pass}")
+            if not check_email_exists(token, target_email):
+                send_telegram_message(chat_id, "⚠️ الإيميل غير موجود، بدء عملية الإضافة...")
+                
+                remove_response = remove_existing_email(token)
+                send_telegram_message(chat_id, f"🗑️ استجابة حذف الإيميل:\n{remove_response}")
+                time.sleep(2)
+                
+                temp_email, temp_pass, temp_session = gen_temp_email()
+                if temp_email:
+                    send_telegram_message(chat_id, f"📧 تم إنشاء إيميل مؤقت\nEmail: {temp_email}\nPassword: {temp_pass}")
+                    
+                    add_email_url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
+                    payload = {
+                        'app_id': '100067',
+                        'access_token': token,
+                        'email': temp_email,
+                        'locale': 'ar_EG'
+                    }
+                    
+                    headers = COMMON_HEADERS.copy()
+                    headers['Accept'] = "application/json"
+                    add_response = requests.post(add_email_url, data=payload, headers=headers)
+                    
+                    send_telegram_message(chat_id, f"📨 استجابة إضافة الإيميل:\n{add_response.text}")
+                    
+                    if add_response.status_code == 200:
+                        send_telegram_message(chat_id, "⏳ في انتظار وصول رمز التحقق...")
                         
-                        add_email_url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
-                        payload = {
-                            'app_id': '100067',
-                            'access_token': token,
-                            'email': temp_email,
-                            'locale': 'ar_EG'
-                        }
-                        
-                        headers = COMMON_HEADERS.copy()
-                        headers['Accept'] = "application/json"
-                        add_response = requests.post(add_email_url, data=payload, headers=headers)
-                        
-                        send_telegram_message(chat_id, f"📨 استجابة إضافة الإيميل:\n{add_response.text}")
-                        
-                        if add_response.status_code == 200:
-                            send_telegram_message(chat_id, "⏳ في انتظار وصول رمز التحقق...")
+                        verification_code = None
+                        start_time = time.time()
+                        while time.time() - start_time < 300:
+                            if not active_monitors[chat_id]['active']:
+                                break
                             
-                            verification_code = None
-                            start_time = time.time()
-                            while time.time() - start_time < 300:
-                                if not active_monitors[chat_id]['active']:
-                                    break
-                                
-                                verification_code = get_verification_code(temp_email, temp_pass, temp_session)
-                                if verification_code:
-                                    send_telegram_message(chat_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
-                                    break
-                                time.sleep(10)
-                            
+                            verification_code = get_verification_code(temp_email, temp_pass, temp_session)
                             if verification_code:
-                                verify_url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
-                                verify_payload = {
-                                    'app_id': '100067',
-                                    'access_token': token,
-                                    'otp': verification_code,
-                                    'email': temp_email
-                                }
-                                
-                                verify_response = requests.post(verify_url, data=verify_payload, headers=COMMON_HEADERS)
-                                send_telegram_message(chat_id, f"📨 استجابة التحقق:\n{verify_response.text}")
-                                
-                                if verify_response.status_code == 200:
-                                    try:
-                                        response_data = verify_response.json()
-                                        verifier_token = response_data.get("verifier_token")
+                                send_telegram_message(chat_id, f"🔑 تم العثور على رمز التحقق: {verification_code}")
+                                break
+                            time.sleep(10)
+                        
+                        if verification_code:
+                            verify_url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
+                            verify_payload = {
+                                'app_id': '100067',
+                                'access_token': token,
+                                'otp': verification_code,
+                                'email': temp_email
+                            }
+                            
+                            verify_response = requests.post(verify_url, data=verify_payload, headers=COMMON_HEADERS)
+                            send_telegram_message(chat_id, f"📨 استجابة التحقق:\n{verify_response.text}")
+                            
+                            if verify_response.status_code == 200:
+                                try:
+                                    response_data = verify_response.json()
+                                    verifier_token = response_data.get("verifier_token")
+                                    
+                                    if verifier_token:
+                                        create_bind_url = "https://100067.connect.garena.com/game/account_security/bind:create_bind_request"
+                                        create_payload = {
+                                            'app_id': '100067',
+                                            'access_token': token,
+                                            'verifier_token': verifier_token,
+                                            'secondary_password': "91B4D142823F7D20C5F08DF69122DE43F35F057A988D9619F6D3138485C9A203",
+                                            'email': temp_email
+                                        }
                                         
-                                        if verifier_token:
-                                            create_bind_url = "https://100067.connect.garena.com/game/account_security/bind:create_bind_request"
-                                            create_payload = {
-                                                'app_id': '100067',
-                                                'access_token': token,
-                                                'verifier_token': verifier_token,
-                                                'secondary_password': "91B4D142823F7D20C5F08DF69122DE43F35F057A988D9619F6D3138485C9A203",
-                                                'email': temp_email
-                                            }
-                                            
-                                            create_response = requests.post(create_bind_url, data=create_payload, headers=COMMON_HEADERS)
-                                            send_telegram_message(chat_id, f"📨 استجابة الربط النهائي:\n{create_response.text}")
-                                        else:
-                                            send_telegram_message(chat_id, "❌ لم يتم العثور على verifier_token في الاستجابة")
-                                    except:
-                                        send_telegram_message(chat_id, "❌ خطأ في تحليل استجابة التحقق")
-                                else:
-                                    send_telegram_message(chat_id, "❌ فشل عملية التحقق")
+                                        create_response = requests.post(create_bind_url, data=create_payload, headers=COMMON_HEADERS)
+                                        send_telegram_message(chat_id, f"📨 استجابة الربط النهائي:\n{create_response.text}")
+                                    else:
+                                        send_telegram_message(chat_id, "❌ لم يتم العثور على verifier_token")
+                                except:
+                                    send_telegram_message(chat_id, "❌ خطأ في تحليل استجابة التحقق")
                             else:
-                                send_telegram_message(chat_id, "❌ لم يتم العثور على رمز التحقق بعد 5 دقائق")
+                                send_telegram_message(chat_id, "❌ فشل عملية التحقق")
                         else:
-                            send_telegram_message(chat_id, "❌ فشل إضافة الإيميل المؤقت")
+                            send_telegram_message(chat_id, "❌ لم يتم العثور على رمز التحقق")
                     else:
-                        send_telegram_message(chat_id, "❌ فشل إنشاء إيميل مؤقت")
+                        send_telegram_message(chat_id, "❌ فشل إضافة الإيميل")
                 else:
-                    send_telegram_message(chat_id, "⚠️ تم حذف ربط الاستعادة الخاص بك!")
-                    temp_email, temp_pass, temp_session = None, None, None
+                    send_telegram_message(chat_id, "❌ فشل إنشاء إيميل مؤقت")
+            else:
+                send_telegram_message(chat_id, "✅ الإيميل لا يزال موجودًا")
             
-            time.sleep(10)
+            time.sleep(3)
         except Exception as e:
-            time.sleep(10)
+            send_telegram_message(chat_id, f"❌ خطأ: {str(e)}")
+            time.sleep(3)
 
 @app.route('/webhook/telegram', methods=['POST'])
 def handle_telegram_webhook():
@@ -193,22 +210,23 @@ def handle_telegram_webhook():
             time.sleep(1)
         
         parts = message_text.split()
-        if len(parts) > 1:
-            token = parts[1]
+        if len(parts) > 2:
+            target_email = parts[1]
+            token = parts[2]
             active_monitors[chat_id] = {'active': True}
-            thread = threading.Thread(target=monitor_process, args=(chat_id, token))
+            thread = threading.Thread(target=monitor_process, args=(chat_id, target_email, token))
             thread.daemon = True
             thread.start()
-            send_telegram_message(chat_id, f"✅ بدء المراقبة للتوكين: {token}")
+            send_telegram_message(chat_id, f"✅ بدء المراقبة\n📧 الإيميل: {target_email}\n🔑 التوكين: {token}")
         else:
-            send_telegram_message(chat_id, "❌ يرجى إرسال /start متبوعًا بالتوكين\nمثال: /start YOUR_TOKEN_HERE")
+            send_telegram_message(chat_id, "❌ استخدام: /start email token")
     
     elif message_text == '/stop':
         if chat_id in active_monitors:
             active_monitors[chat_id]['active'] = False
             send_telegram_message(chat_id, "⏹️ تم إيقاف المراقبة")
         else:
-            send_telegram_message(chat_id, "⚠️ لا توجد مراقبة نشطة لإيقافها")
+            send_telegram_message(chat_id, "⚠️ لا توجد مراقبة نشطة")
     
     return "ok", 200
 
